@@ -75,12 +75,37 @@ with st.sidebar:
     # Status
     st.subheader("⚙️ Status sistema")
     c1, c2, c3 = st.columns(3)
+    
     with c1:
-        st.success("✅ DB")
+        # DB status (Supabase klijent je već inicijalizovan kao klijent_db)
+        if klijent_db:
+            st.success("DB")
+        else:
+            st.error("DB")
+            
     with c2:
-        st.success("✅ HF") if provjeri_hf_api() else st.error("❌ HF")
+        # HF status
+        if provjeri_hf_api():
+            st.success("HF")
+        else:
+            st.error("HF")
+            
     with c3:
-        st.success("✅ LLM") if provjeri_groq() else st.error("❌ LLM")
+        # LLM status (Groq)
+        if provjeri_groq():
+            st.success("LLM")
+        else:
+            st.error("LLM")
+
+    # Status
+    #st.subheader("⚙️ Status sistema")
+    #c1, c2, c3 = st.columns(3)
+    #with c1:
+        #st.success("✅ DB")
+    #with c2:
+        #st.success("✅ HF") if provjeri_hf_api() else st.error("❌ HF")
+    #with c3:
+        #st.success("✅ LLM") if provjeri_groq() else st.error("❌ LLM")
 
     dokumenti_lista = lista_dokumenata(klijent_db)
     st.info(f"🗄️ **{len(dokumenti_lista)}** dok. | **{ukupno_zapisa(klijent_db)}** segm.")
