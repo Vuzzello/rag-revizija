@@ -1,24 +1,10 @@
-# Verzija: 3.0 | Cloud deployment | Ažurirano: 2026-04-29
-
-# UI
+# Verzija: 3.1 | Cloud deployment | Popravka instalacije
 streamlit==1.45.0
-
-# Parsiranje dokumenata
-pypdf==5.4.0
-python-docx==1.1.2
-
-# Chunking
-langchain-text-splitters==0.3.8
-
-# Supabase klijent
-supabase==2.15.1
-
-# Lokalni Embeddings (OVO JE KLJUČNO)
-sentence-transformers==3.0.1
-torch==2.3.0
-
-# LLM — Groq API
-groq==0.25.0
-
-# Konfiguracija
-python-dotenv==1.1.0
+pypdf
+python-docx
+langchain-text-splitters
+supabase
+sentence-transformers
+torch --index-url https://download.pytorch.org/whl/cpu
+groq
+python-dotenv
