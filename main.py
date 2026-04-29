@@ -3,6 +3,7 @@
 import logging
 import tempfile
 from pathlib import Path
+from sentence_transformers import SentenceTransformer
 from datetime import datetime
 
 import streamlit as st
@@ -57,13 +58,27 @@ if nedostaje:
     st.stop()
 
 # ── Inicijalizacija resursa ────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="⏳ Povezivanje sa bazom...")
-def init_resursi():
-    """Kreira Supabase klijent jednom pri pokretanju."""
-    return kreiraj_klijent()
+#@st.cache_resource(show_spinner="⏳ Povezivanje sa bazom...")
+#def init_resursi():
+    #"""Kreira Supabase klijent jednom pri pokretanju."""
+    #return kreiraj_klijent()
 
 
-klijent_db = init_resursi()
+#klijent_db = init_resursi()
+
+@st.cache_resource
+def inicijalizuj_sistem():
+    # 1. Učitavanje modela u memoriju Streamlit servera
+    # Ovo rješava problem sa 404 greškom API-ja
+    model = SentenceTransformer("BAAI/bge-m3")
+    
+    # 2. Kreiranje Supabase klijenta
+    klijent_db = kreiraj_klijent()
+    
+    return model, klijent_db
+
+# Poziv inicijalizacije
+model_za_emb, klijent_db = inicijalizuj_sistem()
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -83,9 +98,15 @@ with st.sidebar:
         else:
             st.error("DB")
             
-    with c2:
+    #with c2:
         # HF status
-        if provjeri_hf_api():
+        #if provjeri_hf_api():
+            #st.success("HF")
+        #else:
+            #st.error("HF")
+    with c2:
+        # Budući da je model učitan lokalno, status je zelen
+        if model_za_emb:
             st.success("HF")
         else:
             st.error("HF")
@@ -184,8 +205,11 @@ with st.sidebar:
             dokument["metadata"]["naziv_dokumenta"] = naziv_dok
             progres.progress((i + 0.6) / len(uploadovani), f"Indeksiranje: {naziv_dok}")
 
+            #chunkovi = podjeli_dokument(dokument)
+            #dodano   = dodaj_dokumente(klijent_db, chunkovi)
             chunkovi = podjeli_dokument(dokument)
-            dodano   = dodaj_dokumente(klijent_db, chunkovi)
+            # Dodajemo model_za_emb kako bi storage.py mogao lokalno kreirati vektore
+            dodano   = dodaj_dokumente(klijent_db, model_za_emb, chunkovi)
 
             if dodano > 0:
                 uspjesno += 1
@@ -225,8 +249,14 @@ with tab1:
             st.warning("⚠️ Baza je prazna. Uploaduj dokumente.")
         else:
             with st.spinner("Pretraživanje..."):
+                #chunkovi = pretrazi(
+                    #klijent_db, upit,
+                    #kategorija=kategorija_upit if kategorija_upit != "Sve" else None,
+
                 chunkovi = pretrazi(
-                    klijent_db, upit,
+                    klijent_db, 
+                    model_za_emb,  # Dodat model
+                    upit,
                     kategorija=kategorija_upit if kategorija_upit != "Sve" else None,
                 )
 
@@ -430,8 +460,15 @@ with tab3:
                 with st.spinner("🔍 Pretraživanje referentnih dokumenata..."):
                     za_pretragu = chunkovi_int[:7]  # Prvih 7 chunkova kao reprezentativni uzorak
                     for chunk in za_pretragu:
+                        #ref = pretrazi_po_dokumentima(
+                            #klijent_db, chunk["tekst"], odabrani, top_k=3
+
                         ref = pretrazi_po_dokumentima(
-                            klijent_db, chunk["tekst"], odabrani, top_k=3
+                            klijent_db, 
+                            model_za_emb,  # Dodat model
+                            chunk["tekst"], 
+                            odabrani, 
+                            top_k=3
                         )
                         for r in ref:
                             kljuc = r["tekst"][:80]

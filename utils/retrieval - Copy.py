@@ -1,5 +1,5 @@
-# Verzija: 3.0 | Ažurirano: 2026-04-29
-# Retrieval modul — Lokalni Embeddings + Supabase pgvector
+# Verzija: 2.0 | Ažurirano: 2025-04-27
+# Retrieval modul — similarity pretraga putem Supabase pgvector
 
 import logging
 from supabase import Client
@@ -9,25 +9,26 @@ from utils.embeddings import generiraj_jedan_embedding
 
 logger = logging.getLogger(__name__)
 
+
 def pretrazi(
     klijent: Client,
-    model,  # NOVO: Dodat model kao argument
     upit: str,
     kategorija: str | None = None,
     top_k: int = RETRIEVAL_TOP_K,
 ) -> list[dict]:
     """
-    Pretražuje Supabase pgvector koristeći lokalno generisan embedding.
+    Pretražuje Supabase pgvector kolekciju i vraća relevantne chunkove.
+    Opciono filtrira po kategoriji. Primjenjuje score threshold.
+    Izlaz: lista dict-ova {tekst, score, metadata}
     """
     if not upit.strip():
         logger.warning("Prazan upit.")
         return []
 
     try:
-        # Generisanje embeddinga lokalno (proslijeđen model)
-        upit_embedding = generiraj_jedan_embedding(model, upit)
+        upit_embedding = generiraj_jedan_embedding(upit)
     except Exception as e:
-        logger.error(f"Greška pri lokalnom embeddingu upita: {e}")
+        logger.error(f"Greška pri generiranju embedding upita: {e}")
         return []
 
     try:
@@ -52,9 +53,9 @@ def pretrazi(
             "score": round(float(red["similarity"]), 4),
             "metadata": {
                 "naziv_dokumenta": red.get("naziv_dokumenta", "—"),
-                "kategorija":       red.get("kategorija", "—"),
+                "kategorija":      red.get("kategorija", "—"),
                 "izvor":           red.get("izvor", "—"),
-                "godina":           red.get("godina", "—"),
+                "godina":          red.get("godina", "—"),
                 "tip_dokumenta":   red.get("tip_dokumenta", "—"),
                 "chunk_index":     red.get("chunk_index", 0),
                 "ukupno_chunkova": red.get("ukupno_chunkova", 1),
@@ -64,25 +65,26 @@ def pretrazi(
     logger.info(f"Pronađeno {len(chunkovi)} relevantnih chunkova za upit.")
     return chunkovi
 
+
 def pretrazi_po_dokumentima(
     klijent: Client,
-    model,  # NOVO: Dodat model
     upit: str,
     nazivi_dokumenata: list[str],
     top_k: int = RETRIEVAL_TOP_K,
 ) -> list[dict]:
     """
-    Pretražuje unutar specifičnih dokumenata koristeći lokalni embedding.
+    Pretražuje samo unutar zadatih dokumenata (za compliance analizu).
     """
     if not upit.strip() or not nazivi_dokumenata:
         return []
 
     try:
-        upit_embedding = generiraj_jedan_embedding(model, upit)
+        upit_embedding = generiraj_jedan_embedding(upit)
     except Exception as e:
-        logger.error(f"Greška pri embeddingu upita: {e}")
+        logger.error(f"Greška pri embedding upita: {e}")
         return []
 
+    # Dohvati sve chunkove za odabrane dokumente
     try:
         rezultat = (
             klijent.table("dokumenti")
@@ -97,40 +99,51 @@ def pretrazi_po_dokumentima(
     if not rezultat.data:
         return []
 
-    # Ručni similarity check (ostaje isti, ali koristi lokalni upit_embedding)
-    def cosine_sim(a, b):
-        dot = sum(x * y for x, y in zip(a, b))
+    # Izračunaj cosine similarity ručno
+    def cosine_sim(a: list[float], b: list[float]) -> float:
+        """Izračunava cosine similarity između dva vektora."""
+        dot   = sum(x * y for x, y in zip(a, b))
         norma = (sum(x ** 2 for x in a) ** 0.5) * (sum(x ** 2 for x in b) ** 0.5)
         return dot / norma if norma > 0 else 0.0
 
     scorovani = []
     for red in rezultat.data:
-        emb_red = red.get("embedding")
-        if not emb_red: continue
-        score = cosine_sim(upit_embedding, emb_red)
+        embedding_red = red.get("embedding")
+        if not embedding_red:
+            continue
+        score = cosine_sim(upit_embedding, embedding_red)
         if score >= RETRIEVAL_SCORE_THRESHOLD:
             scorovani.append({
                 "tekst": red["tekst"],
                 "score": round(score, 4),
                 "metadata": {
                     "naziv_dokumenta": red.get("naziv_dokumenta", "—"),
-                    "kategorija":       red.get("kategorija", "—"),
+                    "kategorija":      red.get("kategorija", "—"),
                     "izvor":           red.get("izvor", "—"),
-                    "godina":           red.get("godina", "—"),
+                    "godina":          red.get("godina", "—"),
                     "tip_dokumenta":   red.get("tip_dokumenta", "—"),
                     "chunk_index":     red.get("chunk_index", 0),
                     "ukupno_chunkova": red.get("ukupno_chunkova", 1),
                 },
             })
 
+    # Sortiraj po score-u i vrati top_k
     scorovani.sort(key=lambda x: x["score"], reverse=True)
     return scorovani[:top_k]
 
+
 def formatiraj_kontekst(chunkovi: list[dict]) -> str:
-    """Formatira chunkove u kontekst string za LLM."""
-    if not chunkovi: return ""
+    """Formatira chunkove u kontekst string za LLM prompt."""
+    if not chunkovi:
+        return ""
+
     dijelovi = []
     for i, chunk in enumerate(chunkovi, 1):
-        m = chunk["metadata"]
-        dijelovi.append(f"[IZVOR {i}] {m['naziv_dokumenta']} ({m['godina']})\n{chunk['tekst']}")
+        meta   = chunk["metadata"]
+        naziv  = meta.get("naziv_dokumenta", "nepoznat")
+        godina = meta.get("godina", "—")
+        izvor  = meta.get("izvor", "—")
+        dijelovi.append(
+            f"[IZVOR {i}] {naziv} | {izvor} | {godina}\n{chunk['tekst']}"
+        )
     return "\n\n---\n\n".join(dijelovi)
