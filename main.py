@@ -109,7 +109,7 @@ with st.sidebar:
                 "Procedura / Uputstvo", "Izvještaj",
                 "Analiza / Ekspertiza", "Prezentacija", "Ostalo",
             ])
-        napomena = st.text_area("Napomena", height=50)
+        napomena = st.text_area("Napomena", height=100)
 
     popunjeno = bool(izvor_upload.strip() and godina_upload.strip())
     if uploadovani and not popunjeno:
