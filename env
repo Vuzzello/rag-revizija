@@ -1,0 +1,21 @@
+# LLM podešavanja
+OLLAMA_MODEL=qwen3:latest
+OLLAMA_URL=http://localhost:11434
+
+# Embedding model
+EMBEDDING_MODEL=BAAI/bge-m3
+
+# Chroma baza podataka
+CHROMA_PATH=./db
+CHROMA_COLLECTION=revizija_kb
+
+# Folder za dokumente
+DATA_PATH=./data/raw
+
+# Chunking parametri
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+
+# Retrieval parametri
+RETRIEVAL_TOP_K=5
+RETRIEVAL_SCORE_THRESHOLD=0.35
