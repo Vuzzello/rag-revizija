@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="bs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Interna Revizija — Widget</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f0f2f6;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        /* ── Kompaktni widget (za ugradnju) ── */
+        .rag-widget {
+            width: 100%;
+            max-width: 700px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+            overflow: hidden;
+        }
+
+        .rag-widget-header {
+            background: linear-gradient(135deg, #1a3a5c 0%, #2d6a9f 100%);
+            color: white;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .rag-widget-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .rag-widget-header p {
+            font-size: 0.75rem;
+            opacity: 0.8;
+        }
+
+        .rag-widget-body {
+            padding: 20px;
+        }
+
+        .rag-widget-body label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #444;
+            margin-bottom: 6px;
+        }
+
+        .rag-widget-body select,
+        .rag-widget-body textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1.5px solid #dde2e8;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: #333;
+            background: #fafbfc;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+
+        .rag-widget-body select:focus,
+        .rag-widget-body textarea:focus {
+            border-color: #2d6a9f;
+            background: white;
+        }
+
+        .rag-widget-body textarea {
+            resize: vertical;
+            min-height: 90px;
+            max-height: 200px;
+        }
+
+        .rag-widget-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .rag-widget-row > div {
+            flex: 1;
+        }
+
+        .rag-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #1a3a5c, #2d6a9f);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            margin-top: 4px;
+        }
+
+        .rag-btn:hover  { opacity: 0.92; }
+        .rag-btn:active { transform: scale(0.99); }
+        .rag-btn:disabled {
+            background: #aaa;
+            cursor: not-allowed;
+        }
+
+        .rag-answer-box {
+            margin-top: 18px;
+            padding: 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid #2d6a9f;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            color: #333;
+            min-height: 60px;
+            display: none;
+        }
+
+        .rag-answer-box.visible { display: block; }
+
+        .rag-loading {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin-top: 14px;
+            color: #666;
+            font-size: 0.85rem;
+        }
+
+        .rag-loading.visible { display: flex; }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2.5px solid #dde2e8;
+            border-top-color: #2d6a9f;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .rag-open-full {
+            display: block;
+            text-align: center;
+            margin-top: 14px;
+            padding: 10px;
+            background: #f0f5ff;
+            border-radius: 8px;
+            color: #2d6a9f;
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+
+        .rag-open-full:hover { background: #dce8ff; }
+
+        /* ── Iframe verzija (kompletna app) ── */
+        .rag-iframe-wrapper {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .rag-iframe-wrapper iframe {
+            width: 100%;
+            height: 850px;
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+        }
+    </style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════
+     OPCIJA A: Kompaktni widget (pitanje + odgovor)
+     Koristi Streamlit app kao backend putem URL parametara
+     ════════════════════════════════════════════════════════════════ -->
+
+<div class="rag-widget" id="rag-widget-compact">
+    <div class="rag-widget-header">
+        <div>
+            <div style="font-size:1.5rem">📋</div>
+        </div>
+        <div>
+            <h3>Baza znanja — Interna Revizija</h3>
+            <p>Postavi pitanje i dobij odgovor iz baze dokumenata</p>
+        </div>
+    </div>
+    <div class="rag-widget-body">
+
+        <div class="rag-widget-row">
+            <div>
+                <label>Filter kategorije</label>
+                <select id="rag-kategorija">
+                    <option value="">Sve kategorije</option>
+                    <option value="Regulatorni">Regulatorni</option>
+                    <option value="Operativni">Operativni</option>
+                    <option value="Ekspertize">Ekspertize</option>
+                    <option value="Opšti">Opšti</option>
+                    <option value="Ostali">Ostali</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 14px;">
+            <label>Tvoje pitanje</label>
+            <textarea
+                id="rag-upit"
+                placeholder="npr. Koji su zahtjevi za adekvatnost kapitala prema Basel III?"
+            ></textarea>
+        </div>
+
+        <button class="rag-btn" id="rag-btn" onclick="otvoriApp()">
+            🔎 Pretraži bazu znanja
+        </button>
+
+        <div class="rag-loading" id="rag-loading">
+            <div class="spinner"></div>
+            <span>Otvaram aplikaciju...</span>
+        </div>
+
+        <a
+            href="#"
+            class="rag-open-full"
+            id="rag-open-full-link"
+            target="_blank"
+            style="display: none"
+        >
+            🔗 Otvori kompletnu aplikaciju →
+        </a>
+
+    </div>
+</div>
+
+<script>
+    // ── KONFIGURACIJA — promijeni URL na svoju Streamlit app ──
+    const STREAMLIT_URL = "https://rag-revizija.streamlit.app";
+    // ─────────────────────────────────────────────────────────
+
+    function otvoriApp() {
+        const upit       = document.getElementById("rag-upit").value.trim();
+        const kategorija = document.getElementById("rag-kategorija").value;
+
+        if (!upit) {
+            document.getElementById("rag-upit").focus();
+            return;
+        }
+
+        const btn     = document.getElementById("rag-btn");
+        const loading = document.getElementById("rag-loading");
+        const link    = document.getElementById("rag-open-full-link");
+
+        btn.disabled = true;
+        loading.classList.add("visible");
+
+        // Gradi URL sa query parametrima
+        const params = new URLSearchParams();
+        if (upit)       params.set("upit", upit);
+        if (kategorija) params.set("kategorija", kategorija);
+
+        const finalUrl = `${STREAMLIT_URL}/?${params.toString()}`;
+
+        // Otvori Streamlit app u novom tabu
+        window.open(finalUrl, "_blank");
+
+        // Reset nakon 2 sekunde
+        setTimeout(() => {
+            btn.disabled = false;
+            loading.classList.remove("visible");
+            link.style.display = "block";
+            link.href = finalUrl;
+        }, 2000);
+    }
+
+    // Enter = submit
+    document.getElementById("rag-upit").addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && e.ctrlKey) otvoriApp();
+    });
+</script>
+
+<br><br>
+
+<!-- ════════════════════════════════════════════════════════════════
+     OPCIJA B: Kompletna app ugrađena kao iframe
+     Zahtijeva ?embed=true parametar u Streamlit URL-u
+     ════════════════════════════════════════════════════════════════ -->
+
+<!--
+    UKLONI ovaj komentar da aktiviraš iframe varijantu:
+
+<div class="rag-iframe-wrapper">
+    <iframe
+        src="https://rag-revizija.streamlit.app/?embed=true"
+        title="RAG — Interna Revizija"
+        allow="clipboard-write"
+    ></iframe>
+</div>
+
+-->
+
+</body>
+</html>

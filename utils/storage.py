@@ -1,60 +1,45 @@
-# Verzija: 1.0 | Ažurirano: 2025-04-27
+# Verzija: 2.0 | Ažurirano: 2025-04-27
+# Storage modul — Supabase pgvector umjesto ChromaDB
 
 import logging
-import uuid
-from sentence_transformers import SentenceTransformer
+from supabase import create_client, Client
 
-import chromadb
-from chromadb import Collection
-
-from config import CHROMA_PATH, CHROMA_COLLECTION
+from config import SUPABASE_URL, SUPABASE_KEY
 from utils.embeddings import generiraj_embeddings
 
 logger = logging.getLogger(__name__)
 
 
-def kreiraj_klijent() -> chromadb.PersistentClient:
-    """Kreira persistentni Chroma klijent."""
+def kreiraj_klijent() -> Client:
+    """Kreira i vraća Supabase klijent."""
     try:
-        klijent = chromadb.PersistentClient(path=str(CHROMA_PATH))
-        logger.info(f"Chroma klijent kreiran: {CHROMA_PATH}")
+        klijent = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase klijent kreiran.")
         return klijent
     except Exception as e:
-        logger.error(f"Greška pri kreiranju Chroma klijenta: {e}")
+        logger.error(f"Greška pri kreiranju Supabase klijenta: {e}")
         raise
 
 
-def dohvati_kolekciju(klijent: chromadb.PersistentClient) -> Collection:
-    """Dohvata ili kreira Chroma kolekciju."""
-    try:
-        kolekcija = klijent.get_or_create_collection(
-            name=CHROMA_COLLECTION,
-            metadata={"hnsw:space": "cosine"},  # Cosine similarity
-        )
-        logger.info(f"Kolekcija '{CHROMA_COLLECTION}' dohvaćena ({kolekcija.count()} zapisa).")
-        return kolekcija
-    except Exception as e:
-        logger.error(f"Greška pri dohvatanju kolekcije: {e}")
-        raise
-
-
-def dokument_postoji(kolekcija: Collection, naziv_dokumenta: str) -> bool:
+def dokument_postoji(klijent: Client, naziv_dokumenta: str) -> bool:
     """Provjerava da li dokument već postoji u bazi po nazivu."""
     try:
-        rezultat = kolekcija.get(where={"naziv_dokumenta": naziv_dokumenta}, limit=1)
-        return len(rezultat["ids"]) > 0
+        rezultat = (
+            klijent.table("dokumenti")
+            .select("id", count="exact")
+            .eq("naziv_dokumenta", naziv_dokumenta)
+            .limit(1)
+            .execute()
+        )
+        return (rezultat.count or 0) > 0
     except Exception as e:
-        logger.error(f"Greška pri provjeri postojanja dokumenta: {e}")
+        logger.error(f"Greška pri provjeri duplikata: {e}")
         return False
 
 
-def dodaj_dokumente(
-    kolekcija: Collection,
-    model: SentenceTransformer,
-    chunkovi: list[dict],
-) -> int:
+def dodaj_dokumente(klijent: Client, chunkovi: list[dict]) -> int:
     """
-    Dodaje chunkove u Chroma kolekciju.
+    Dodaje chunkove u Supabase tabelu 'dokumenti'.
     Vraća broj uspješno dodanih chunkova.
     """
     if not chunkovi:
@@ -63,73 +48,76 @@ def dodaj_dokumente(
 
     tekstovi = [c["tekst"] for c in chunkovi]
     metadati = [c["metadata"] for c in chunkovi]
-    id_lista = [str(uuid.uuid4()) for _ in chunkovi]
 
     try:
-        embeddings = generiraj_embeddings(model, tekstovi)
+        # Generiraj embeddings za sve chunkove
+        embeddings = generiraj_embeddings(tekstovi)
 
-        kolekcija.add(
-            ids=id_lista,
-            embeddings=embeddings,
-            documents=tekstovi,
-            metadatas=metadati,
-        )
+        # Pripremi redove za insert
+        redovi = []
+        for tekst, meta, embedding in zip(tekstovi, metadati, embeddings):
+            redovi.append({
+                "naziv_dokumenta": meta.get("naziv_dokumenta", "nepoznat"),
+                "kategorija":      meta.get("kategorija", "Ostali"),
+                "izvor":           meta.get("izvor", ""),
+                "godina":          meta.get("godina", ""),
+                "tip_dokumenta":   meta.get("tip_dokumenta", ""),
+                "napomena":        meta.get("napomena", ""),
+                "datum_uploada":   meta.get("datum_uploada", ""),
+                "chunk_index":     meta.get("chunk_index", 0),
+                "ukupno_chunkova": meta.get("ukupno_chunkova", 1),
+                "tekst":           tekst,
+                "embedding":       embedding,
+            })
+
+        # Batch insert (Supabase prima max 1000 redova odjednom)
+        velicina_batcha = 100
+        ukupno_dodano = 0
+
+        for i in range(0, len(redovi), velicina_batcha):
+            batch = redovi[i: i + velicina_batcha]
+            klijent.table("dokumenti").insert(batch).execute()
+            ukupno_dodano += len(batch)
+            logger.info(f"Dodan batch {i // velicina_batcha + 1}: {len(batch)} chunkova")
 
         naziv = metadati[0].get("naziv_dokumenta", "nepoznat")
-        logger.info(f"Dodano {len(chunkovi)} chunkova za dokument '{naziv}'.")
-        return len(chunkovi)
+        logger.info(f"Ukupno dodano {ukupno_dodano} chunkova za '{naziv}'.")
+        return ukupno_dodano
 
     except Exception as e:
-        logger.error(f"Greška pri dodavanju dokumenata u Chroma: {e}")
+        logger.error(f"Greška pri dodavanju dokumenata u Supabase: {e}")
         return 0
 
 
-def obrisi_dokument(kolekcija: Collection, naziv_dokumenta: str) -> bool:
-    """Briše sve chunkove dokumenta iz kolekcije po nazivu fajla."""
+def obrisi_dokument(klijent: Client, naziv_dokumenta: str) -> bool:
+    """Briše sve chunkove dokumenta iz Supabase tabele."""
     try:
-        kolekcija.delete(where={"naziv_dokumenta": naziv_dokumenta})
-        logger.info(f"Dokument '{naziv_dokumenta}' obrisan iz baze.")
+        klijent.table("dokumenti").delete().eq("naziv_dokumenta", naziv_dokumenta).execute()
+        logger.info(f"Dokument '{naziv_dokumenta}' obrisan.")
         return True
     except Exception as e:
         logger.error(f"Greška pri brisanju dokumenta '{naziv_dokumenta}': {e}")
         return False
 
 
-def lista_dokumenata(kolekcija: Collection) -> list[dict]:
+def lista_dokumenata(klijent: Client) -> list[dict]:
     """
-    Vraća listu jedinstvenih dokumenata u bazi sa brojem chunkova.
-    Izlaz: [{'naziv_dokumenta': ..., 'kategorija': ..., 'godina': ..., 'chunkova': ...}]
+    Vraća listu jedinstvenih dokumenata sa brojem chunkova.
+    Koristi SQL funkciju lista_dokumenata_unique() iz Supabase.
     """
     try:
-        svi = kolekcija.get(include=["metadatas"])
-        if not svi["metadatas"]:
-            return []
-
-        # Grupiši po nazivu dokumenta
-        dokumenti: dict[str, dict] = {}
-        for meta in svi["metadatas"]:
-            naziv = meta.get("naziv_dokumenta", "nepoznat")
-            if naziv not in dokumenti:
-                dokumenti[naziv] = {
-                    "naziv_dokumenta": naziv,
-                    "kategorija":      meta.get("kategorija", "—"),
-                    "izvor":           meta.get("izvor", "—"),
-                    "godina":          meta.get("godina", "—"),
-                    "chunkova":        0,
-                }
-            dokumenti[naziv]["chunkova"] += 1
-
-        return list(dokumenti.values())
-
+        rezultat = klijent.rpc("lista_dokumenata_unique").execute()
+        return rezultat.data or []
     except Exception as e:
         logger.error(f"Greška pri dohvatanju liste dokumenata: {e}")
         return []
 
 
-def ukupno_zapisa(kolekcija: Collection) -> int:
-    """Vraća ukupan broj chunkova u kolekciji."""
+def ukupno_zapisa(klijent: Client) -> int:
+    """Vraća ukupan broj chunkova u tabeli."""
     try:
-        return kolekcija.count()
+        rezultat = klijent.table("dokumenti").select("id", count="exact").execute()
+        return rezultat.count or 0
     except Exception as e:
         logger.error(f"Greška pri brojanju zapisa: {e}")
         return 0

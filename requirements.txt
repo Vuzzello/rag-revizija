@@ -1,4 +1,4 @@
-# Verzija: 1.0 | Ažurirano: 2025-04-27
+# Verzija: 2.0 | Cloud deployment | Ažurirano: 2025-04-27
 
 # UI
 streamlit==1.45.0
@@ -10,14 +10,14 @@ python-docx==1.1.2
 # Chunking
 langchain-text-splitters==0.3.8
 
-# Embeddings
-sentence-transformers==4.1.0
+# Supabase klijent
+supabase==2.15.1
 
-# Vector baza
-chromadb==1.0.7
+# LLM — Groq API
+groq==0.25.0
 
-# LLM (Ollama Python SDK)
-ollama==0.4.8
+# HTTP pozivi (za HuggingFace Inference API)
+httpx==0.28.1
 
 # Konfiguracija
 python-dotenv==1.1.0

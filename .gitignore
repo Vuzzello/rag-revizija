@@ -1,0 +1,22 @@
+# Privatni fajlovi — NE idu na GitHub
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Lokalni podaci
+data/raw/
+db/
+
+# Streamlit cache
+.streamlit/
+
+# OS fajlovi
+.DS_Store
+Thumbs.db

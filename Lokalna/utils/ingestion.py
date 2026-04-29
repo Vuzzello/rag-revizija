@@ -1,5 +1,4 @@
-# Verzija: 2.0 | Ažurirano: 2025-04-27
-# Ingestion — parsiranje PDF/DOCX/TXT dokumenata
+# Verzija: 1.0 | Ažurirano: 2025-04-27
 
 import logging
 from pathlib import Path
@@ -22,7 +21,7 @@ def parsiraj_pdf(putanja: Path) -> str:
             if sadrzaj:
                 tekst_stranica.append(sadrzaj)
             else:
-                logger.warning(f"Stranica {i + 1} u '{putanja.name}' prazna ili nečitljiva.")
+                logger.warning(f"Stranica {i + 1} u '{putanja.name}' je prazna ili nečitljiva.")
         return "\n\n".join(tekst_stranica)
     except Exception as e:
         logger.error(f"Greška pri parsiranju PDF-a '{putanja.name}': {e}")
@@ -50,8 +49,12 @@ def parsiraj_txt(putanja: Path) -> str:
 
 
 def ucitaj_dokument(putanja: Path, metadata: dict) -> dict | None:
-    """Parsira dokument i vraća dict sa tekstom i metadatom."""
+    """
+    Parsira dokument i vraća dict sa tekstom i metadatom.
+    Vraća None ako fajl nije podržan ili ako je tekst prazan.
+    """
     sufiks = putanja.suffix.lower()
+
     if sufiks not in PODRZANI_FORMATI:
         logger.warning(f"Format '{sufiks}' nije podržan: '{putanja.name}'")
         return None
@@ -62,16 +65,30 @@ def ucitaj_dokument(putanja: Path, metadata: dict) -> dict | None:
         tekst = parsiraj_docx(putanja)
     elif sufiks == ".txt":
         tekst = parsiraj_txt(putanja)
-    else:
-        return None
 
     tekst = tekst.strip()
+
     if not tekst:
-        logger.warning(f"Dokument '{putanja.name}' prazan — preskačem.")
+        logger.warning(f"Dokument '{putanja.name}' je prazan nakon parsiranja — preskačem.")
         return None
 
-    logger.info(f"Učitan '{putanja.name}' ({len(tekst)} znakova).")
+    logger.info(f"Uspješno učitan dokument '{putanja.name}' ({len(tekst)} znakova).")
+
     return {
         "tekst": tekst,
-        "metadata": {**metadata, "naziv_dokumenta": putanja.name},
+        "metadata": {
+            **metadata,
+            "naziv_dokumenta": putanja.name,
+        },
     }
+
+
+def ucitaj_vise_dokumenata(putanje: list[Path], metadata: dict) -> list[dict]:
+    """Parsira listu fajlova i vraća samo uspješno učitane dokumente."""
+    rezultati = []
+    for putanja in putanje:
+        dokument = ucitaj_dokument(putanja, metadata)
+        if dokument:
+            rezultati.append(dokument)
+    logger.info(f"Učitano {len(rezultati)} od {len(putanje)} dokumenata.")
+    return rezultati

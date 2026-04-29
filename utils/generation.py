@@ -1,48 +1,60 @@
-# Verzija: 1.0 | Ažurirano: 2025-04-27
+# Verzija: 2.0 | Ažurirano: 2025-04-27
+# Generacija odgovora putem Groq API (Llama 3.3 70B)
 
 import logging
 from typing import Generator
 
-import ollama
+from groq import Groq
 
-from config import OLLAMA_MODEL, OLLAMA_URL, OLLAMA_TEMPERATURE, OLLAMA_TIMEOUT
+from config import GROQ_API_KEY, GROQ_MODEL, GROQ_TEMPERATURE, GROQ_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
 # ── System prompt ──────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Ti si ekspert za internu reviziju. Odgovaraj isključivo na osnovu priloženog konteksta.
+SYSTEM_PROMPT = """Ti si asistent za interne revizore. Odgovaraj isključivo na osnovu priloženog konteksta.
 Ako odgovor nije u kontekstu, jasno kaži: 'Nisam pronašao relevantan odgovor u bazi znanja.'
-Nikada ne izmišljaj činjenice. Budi precizan, profesionalan i koristi revizorsku terminologiju.
+Nikada ne izmišljaj činjenice. Budi precizan i koncizan.
 Na kraju odgovora uvijek navedi izvore koje si koristio u formatu:
 Korišteni izvori:
 - [naziv dokumenta] | [izvor] | [godina]"""
 
+# ── Compliance system prompt ───────────────────────────────────────────────────
+COMPLIANCE_SYSTEM_PROMPT = """Ti si ekspert za pravnu i regulatornu usklađenost dokumenata u oblasti interne revizije.
+Tvoj zadatak je da analiziraš interni dokument i pronađeš mjere u kojima nije usklađen sa referentnim dokumentima.
 
-def provjeri_ollama() -> bool:
-    """Provjerava da li je Ollama servis dostupan i model učitan."""
+Tvoj odgovor MORA biti strukturiran tačno ovako:
+
+## ✅ Usklađeni aspekti
+[Navedi konkretne dijelove internog dokumenta koji su usklađeni sa referentnim dokumentima]
+
+## ⚠️ Aspekti koji zahtijevaju usklađivanje
+[Za svaki neusklađeni aspekt:]
+**Problem:** [Opis konkretnog problema neusklađenosti]
+**Referenca:** [Naziv referentnog dokumenta i relevantna odredba]
+**Sugestija:** [Konkretan prijedlog kako uskladiti]
+
+## 📋 Sažetak
+**Ukupna procjena usklađenosti:** [Visoka / Srednja / Niska]
+**Broj problema:** [broj]
+**Prioritetne akcije:** [lista najvažnijih koraka za usklađivanje]
+
+Budi precizan i navodi konkretne odredbe. Ne izmišljaj reference koje nisu u kontekstu."""
+
+
+def _kreiraj_groq_klijent() -> Groq:
+    """Kreira Groq klijent."""
+    return Groq(api_key=GROQ_API_KEY)
+
+
+def provjeri_groq() -> bool:
+    """Provjerava dostupnost Groq API-ja."""
     try:
-        klijent = ollama.Client(host=OLLAMA_URL, timeout=OLLAMA_TIMEOUT)
-        modeli  = klijent.list()
-        nazivi  = [m.model for m in modeli.models]
-        dostupan = any(OLLAMA_MODEL in naziv for naziv in nazivi)
-        if not dostupan:
-            logger.warning(
-                f"Model '{OLLAMA_MODEL}' nije pronađen. "
-                f"Dostupni modeli: {nazivi}"
-            )
-        return dostupan
+        klijent = _kreiraj_groq_klijent()
+        klijent.models.list()
+        return True
     except Exception as e:
-        logger.error(f"Ollama nije dostupan na {OLLAMA_URL}: {e}")
+        logger.error(f"Groq API nije dostupan: {e}")
         return False
-
-
-def kreiraj_prompt(upit: str, kontekst: str) -> str:
-    """Kreira finalni prompt sa upitom i kontekstom za LLM."""
-    return (
-        f"Na osnovu sljedećeg konteksta odgovori na pitanje.\n\n"
-        f"=== KONTEKST ===\n{kontekst}\n\n"
-        f"=== PITANJE ===\n{upit}"
-    )
 
 
 def generiraj_odgovor_stream(
@@ -50,61 +62,86 @@ def generiraj_odgovor_stream(
     kontekst: str,
 ) -> Generator[str, None, None]:
     """
-    Generira odgovor putem Ollama streaming API-ja.
+    Generira odgovor putem Groq streaming API-ja.
     Yield-a tekst token po token za Streamlit st.write_stream().
     """
     if not kontekst.strip():
         yield "Nisam pronašao relevantan odgovor u bazi znanja."
         return
 
-    prompt = kreiraj_prompt(upit, kontekst)
+    prompt = (
+        f"Na osnovu sljedećeg konteksta odgovori na pitanje.\n\n"
+        f"=== KONTEKST ===\n{kontekst}\n\n"
+        f"=== PITANJE ===\n{upit}"
+    )
 
     try:
-        klijent = ollama.Client(host=OLLAMA_URL, timeout=OLLAMA_TIMEOUT)
-
-        stream = klijent.chat(
-            model=OLLAMA_MODEL,
+        klijent = _kreiraj_groq_klijent()
+        stream  = klijent.chat.completions.create(
+            model=GROQ_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": prompt},
             ],
+            temperature=GROQ_TEMPERATURE,
+            max_tokens=GROQ_MAX_TOKENS,
             stream=True,
-            #options={
-                #"temperature": OLLAMA_TEMPERATURE,
-                #"num_predict": 1024,
-            options={
-                "temperature": 0.1,           # Smanjujemo kreativnost na minimum
-                "num_predict": 1024,
-                "repeat_penalty": 1.5,        # KAŽNJAVA ponavljanje istih rečenica
-                "repeat_last_n": 128,         # Koliko daleko unazad model gleda da ne ponovi tekst
-                "top_k": 20,                  # Ograničava izbor riječi na najvjerovatnije
-                "top_p": 0.5                  # Dodatno filtriranje fokusa
-            },
         )
 
-        for dio in stream:
-            token = dio.message.content
+        for chunk in stream:
+            token = chunk.choices[0].delta.content
             if token:
                 yield token
 
-    #except ollama.ResponseError as e:
-        #logger.error(f"Ollama greška pri generaciji: {e}")
-        #yield f"Greška pri generaciji odgovora: {e}"
-    #except Exception as e:
-        #logger.error(f"Neočekivana greška pri generaciji: {e}")
-        #yield "Desila se greška. Provjeri da li Ollama radi (`ollama serve`)."
-
-    except ollama.ResponseError as e:
-        logger.error(f"Ollama greška pri generaciji: {e}")
-        yield f"⚠️ **Ollama ResponseError:** {e.error}"
     except Exception as e:
-        logger.error(f"Neočekivana greška pri generaciji: {e}")
-        # Ovo će ispisati tačan naziv greške i opis u Streamlit chat-u
-        yield f"❌ **STVARNA GREŠKA:** {type(e).__name__}: {str(e)}"
+        logger.error(f"Groq greška pri generaciji: {e}")
+        yield f"\n\n❌ Greška pri generaciji odgovora: {e}"
+
+
+def generiraj_compliance_stream(
+    interni_tekst: str,
+    referentni_kontekst: str,
+    naziv_internog: str,
+) -> Generator[str, None, None]:
+    """
+    Generira compliance izvještaj putem Groq streaming API-ja.
+    """
+    if not referentni_kontekst.strip():
+        yield "⚠️ Nisu pronađeni relevantni odlomci u referentnim dokumentima."
+        return
+
+    prompt = (
+        f"=== INTERNI DOKUMENT ZA ANALIZU ===\n"
+        f"Naziv: {naziv_internog}\n\n"
+        f"{interni_tekst[:4000]}\n\n"
+        f"=== REFERENTNI DOKUMENTI ===\n"
+        f"{referentni_kontekst}"
+        f"\n\nAnaliziraj usklađenost internog dokumenta sa referentnim dokumentima."
+    )
+
+    try:
+        klijent = _kreiraj_groq_klijent()
+        stream  = klijent.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": COMPLIANCE_SYSTEM_PROMPT},
+                {"role": "user",   "content": prompt},
+            ],
+            temperature=0.05,
+            max_tokens=3000,
+            stream=True,
+        )
+
+        for chunk in stream:
+            token = chunk.choices[0].delta.content
+            if token:
+                yield token
+
+    except Exception as e:
+        logger.error(f"Groq greška pri compliance analizi: {e}")
+        yield f"\n\n❌ Greška: {e}"
+
 
 def generiraj_odgovor(upit: str, kontekst: str) -> str:
-    """
-    Generira kompletan odgovor (bez streaminga).
-    Koristi se za testiranje i debugging.
-    """
+    """Vraća kompletan odgovor (bez streaminga) — za testiranje."""
     return "".join(generiraj_odgovor_stream(upit, kontekst))

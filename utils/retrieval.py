@@ -1,8 +1,8 @@
-# Verzija: 1.0 | Ažurirano: 2025-04-27
+# Verzija: 2.0 | Ažurirano: 2025-04-27
+# Retrieval modul — similarity pretraga putem Supabase pgvector
 
 import logging
-from sentence_transformers import SentenceTransformer
-from chromadb import Collection
+from supabase import Client
 
 from config import RETRIEVAL_TOP_K, RETRIEVAL_SCORE_THRESHOLD
 from utils.embeddings import generiraj_jedan_embedding
@@ -11,78 +11,125 @@ logger = logging.getLogger(__name__)
 
 
 def pretrazi(
-    kolekcija: Collection,
-    model: SentenceTransformer,
+    klijent: Client,
     upit: str,
     kategorija: str | None = None,
     top_k: int = RETRIEVAL_TOP_K,
 ) -> list[dict]:
     """
-    Pretražuje Chroma kolekciju i vraća relevantne chunkove.
+    Pretražuje Supabase pgvector kolekciju i vraća relevantne chunkove.
     Opciono filtrira po kategoriji. Primjenjuje score threshold.
     Izlaz: lista dict-ova {tekst, score, metadata}
     """
     if not upit.strip():
-        logger.warning("Prazan upit — preskačem pretragu.")
+        logger.warning("Prazan upit.")
         return []
 
-    # Generiraj embedding upita
     try:
-        upit_embedding = generiraj_jedan_embedding(model, upit)
+        upit_embedding = generiraj_jedan_embedding(upit)
     except Exception as e:
-        logger.error(f"Greška pri embedding upita: {e}")
+        logger.error(f"Greška pri generiranju embedding upita: {e}")
         return []
 
-    # Pripremi where filter
-    where_filter = None
-    if kategorija and kategorija != "Sve":
-        where_filter = {"kategorija": kategorija}
-        logger.info(f"Retrieval sa filterom kategorije: '{kategorija}'")
-    else:
-        logger.info("Retrieval bez filtera kategorije.")
-
-    # Upit prema Chroma
     try:
-        kwargs = {
-            "query_embeddings": [upit_embedding],
-            "n_results": top_k,
-            "include": ["documents", "metadatas", "distances"],
-        }
-        if where_filter:
-            kwargs["where"] = where_filter
-
-        rezultati = kolekcija.query(**kwargs)
+        rezultat = klijent.rpc(
+            "pretrazi_dokumente",
+            {
+                "upit_embedding":    upit_embedding,
+                "kategorija_filter": kategorija if kategorija and kategorija != "Sve" else None,
+                "top_k":             top_k,
+                "score_threshold":   RETRIEVAL_SCORE_THRESHOLD,
+            },
+        ).execute()
 
     except Exception as e:
-        logger.error(f"Greška pri pretrazi Chroma: {e}")
+        logger.error(f"Greška pri pretrazi Supabase: {e}")
         return []
 
-    # Obradi rezultate
     chunkovi = []
-    dokumenti = rezultati.get("documents", [[]])[0]
-    metadati  = rezultati.get("metadatas", [[]])[0]
-    distance  = rezultati.get("distances", [[]])[0]
-
-    for tekst, meta, dist in zip(dokumenti, metadati, distance):
-        # Chroma cosine distance: 0 = identično, 2 = suprotno
-        # Konvertuj u similarity score (0.0 – 1.0)
-        score = round(1 - (dist / 2), 4)
-
-        if score < RETRIEVAL_SCORE_THRESHOLD:
-            logger.info(
-                f"Chunk iz '{meta.get('naziv_dokumenta')}' odbačen "
-                f"(score={score} < threshold={RETRIEVAL_SCORE_THRESHOLD})."
-            )
-            continue
-
+    for red in (rezultat.data or []):
         chunkovi.append({
-            "tekst":    tekst,
-            "score":    score,
-            "metadata": meta,
+            "tekst": red["tekst"],
+            "score": round(float(red["similarity"]), 4),
+            "metadata": {
+                "naziv_dokumenta": red.get("naziv_dokumenta", "—"),
+                "kategorija":      red.get("kategorija", "—"),
+                "izvor":           red.get("izvor", "—"),
+                "godina":          red.get("godina", "—"),
+                "tip_dokumenta":   red.get("tip_dokumenta", "—"),
+                "chunk_index":     red.get("chunk_index", 0),
+                "ukupno_chunkova": red.get("ukupno_chunkova", 1),
+            },
         })
 
     logger.info(f"Pronađeno {len(chunkovi)} relevantnih chunkova za upit.")
     return chunkovi
+
+
+def pretrazi_po_dokumentima(
+    klijent: Client,
+    upit: str,
+    nazivi_dokumenata: list[str],
+    top_k: int = RETRIEVAL_TOP_K,
+) -> list[dict]:
+    """
+    Pretražuje samo unutar zadatih dokumenata (za compliance analizu).
+    """
+    if not upit.strip() or not nazivi_dokumenata:
+        return []
+
+    try:
+        upit_embedding = generiraj_jedan_embedding(upit)
+    except Exception as e:
+        logger.error(f"Greška pri embedding upita: {e}")
+        return []
+
+    # Dohvati sve chunkove za odabrane dokumente
+    try:
+        rezultat = (
+            klijent.table("dokumenti")
+            .select("tekst, naziv_dokumenta, kategorija, izvor, godina, tip_dokumenta, chunk_index, ukupno_chunkova, embedding")
+            .in_("naziv_dokumenta", nazivi_dokumenata)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"Greška pri dohvatanju referentnih dokumenata: {e}")
+        return []
+
+    if not rezultat.data:
+        return []
+
+    # Izračunaj cosine similarity ručno
+    def cosine_sim(a: list[float], b: list[float]) -> float:
+        """Izračunava cosine similarity između dva vektora."""
+        dot   = sum(x * y for x, y in zip(a, b))
+        norma = (sum(x ** 2 for x in a) ** 0.5) * (sum(x ** 2 for x in b) ** 0.5)
+        return dot / norma if norma > 0 else 0.0
+
+    scorovani = []
+    for red in rezultat.data:
+        embedding_red = red.get("embedding")
+        if not embedding_red:
+            continue
+        score = cosine_sim(upit_embedding, embedding_red)
+        if score >= RETRIEVAL_SCORE_THRESHOLD:
+            scorovani.append({
+                "tekst": red["tekst"],
+                "score": round(score, 4),
+                "metadata": {
+                    "naziv_dokumenta": red.get("naziv_dokumenta", "—"),
+                    "kategorija":      red.get("kategorija", "—"),
+                    "izvor":           red.get("izvor", "—"),
+                    "godina":          red.get("godina", "—"),
+                    "tip_dokumenta":   red.get("tip_dokumenta", "—"),
+                    "chunk_index":     red.get("chunk_index", 0),
+                    "ukupno_chunkova": red.get("ukupno_chunkova", 1),
+                },
+            })
+
+    # Sortiraj po score-u i vrati top_k
+    scorovani.sort(key=lambda x: x["score"], reverse=True)
+    return scorovani[:top_k]
 
 
 def formatiraj_kontekst(chunkovi: list[dict]) -> str:
@@ -96,10 +143,7 @@ def formatiraj_kontekst(chunkovi: list[dict]) -> str:
         naziv  = meta.get("naziv_dokumenta", "nepoznat")
         godina = meta.get("godina", "—")
         izvor  = meta.get("izvor", "—")
-
         dijelovi.append(
-            f"[IZVOR {i}] {naziv} | {izvor} | {godina}\n"
-            f"{chunk['tekst']}"
+            f"[IZVOR {i}] {naziv} | {izvor} | {godina}\n{chunk['tekst']}"
         )
-
     return "\n\n---\n\n".join(dijelovi)
