@@ -1,4 +1,4 @@
-# Verzija: 2.0 | Cloud deployment | Ažurirano: 2025-04-27
+# Verzija: 3.0 | Cloud deployment | Ažurirano: 2026-04-29
 
 # UI
 streamlit==1.45.0
@@ -13,11 +13,12 @@ langchain-text-splitters==0.3.8
 # Supabase klijent
 supabase==2.15.1
 
+# Lokalni Embeddings (OVO JE KLJUČNO)
+sentence-transformers==3.0.1
+torch==2.3.0
+
 # LLM — Groq API
 groq==0.25.0
-
-# HTTP pozivi (za HuggingFace Inference API)
-httpx==0.28.1
 
 # Konfiguracija
 python-dotenv==1.1.0
